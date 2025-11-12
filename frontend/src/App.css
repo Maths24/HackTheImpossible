@@ -35,3 +35,31 @@
   border-radius: 10px;
   cursor: pointer;
 }
+
+.drone-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  background: rgba(10, 18, 28, 0.95);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+.drone-panel h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.drone-panel button {
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}

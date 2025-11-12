@@ -1,65 +1,99 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
-export type LngLat = [number, number];
+import { RenderEngine } from "../engine/renderEngine";
+import { createInitialWorldState } from "../engine/worldState";
+import { createDronesLayerDescriptor } from "../engine/dronesLayer";
+import type { WorldState, DroneEntity } from "../engine/types";
 
-type MapViewProps = {
-  /** Initial [lng, lat] the map centers on when mounted */
-  initialCenter?: LngLat;
-  /** Initial zoom when mounted */
-  initialZoom?: number;
-  /** Optional Mapbox style URL (defaults to streets) */
-  styleUrl?: string;
-  /** Called on any map move (drag/zoom/rotate) */
-  onMove?(center: LngLat, zoom: number): void;
-  /** Optional className for the container div */
-  className?: string;
-};
+export const MapView = () => {
+    const mapRef = useRef<mapboxgl.Map | null> (null);
+    const mapContainerRef = useRef<HTMLDivElement | null> (null);
+    const engineRef = useRef<RenderEngine | null> (null);
+    const worldRef = useRef<WorldState>(createInitialWorldState());
+    const [selectedDrone, setSelectedDrone] = useState<DroneEntity | null> (null);
 
-export const MapView: React.FC<MapViewProps> = ({
-  initialCenter = [0, 0],
-  initialZoom = 2,
-  styleUrl = "mapbox://styles/mapbox/streets-v12",
-  onMove,
-  className
-}) => {
-  const mapRef = useRef<mapboxgl.Map | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string;
+        if (!mapContainerRef.current || mapRef.current) return;
 
-  useEffect(() => {
-    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string;
+        const map = new mapboxgl.Map({
+            container: mapContainerRef.current,
+            style: "mapbox://styles/mapbox/streets-v12",
+            center: [-74.0, 40.7],
+            zoom: 9
+        });
 
-    if (!containerRef.current || mapRef.current) return;
+        map.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: styleUrl,
-      center: initialCenter,
-      zoom: initialZoom
-    });
+        map.on("load", () => {
+            // Initialize render engine with initial world stte
+            const engine = new RenderEngine(map, worldRef.current);
+            engineRef.current = engine;
 
-    map.addControl(new mapboxgl.NavigationControl(), "top-right");
+            // Register drones layer
+            engine.registerLayer(createDronesLayerDescriptor());
 
-    const handleMove = () => {
-      if (!onMove) return;
-      const c = map.getCenter();
-      onMove([c.lng, c.lat], map.getZoom());
-    };
-    map.on("move", handleMove);
+            // Initial render 
+            engine.update({ zoom: map.getZoom() });
 
-    mapRef.current = map;
+            // Click handler for drones
+            map.on("click", "drones-layer", (e) => {
+                const feature = e.features?.[0];
+                if (!feature || !feature.properties) return;
 
-    return () => {
-      map.off("move", handleMove);
-      map.remove();
-      mapRef.current = null;
-    };
-    // NOTE: We intentionally do NOT include initialCenter/initialZoom/styleUrl in deps,
-    // so the map isn't re-created if the parent re-renders.
-    // Change these into controlled props if you need live updates after mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onMove]);
+                const id = feature.properties.id as string | undefined;
+                if (!id) return;
 
-  return <div id="map-container" ref={containerRef} className={className} />;
-};
+                // Look up the full drone entity from world state
+                const world = worldRef.current;
+                const drone = world.drones.find((d) => d.id === id) || null;
+
+                setSelectedDrone(drone);
+            });
+
+            // Clicking empty map clears selection
+            map.on("click", (e) => {
+                const features = map.queryRenderedFeatures(e.point, { layers: ["drones-layer"] });
+                if (!features.length) {
+                    setSelectedDrone(null);
+                }
+            });
+        });
+
+        // Update engine on zoom changes
+        map.on("zoom", () => {
+            const engine = engineRef.current;
+            if (!engine) return;
+            engine.update({ zoom: map.getZoom() });
+        });
+
+        mapRef.current = map;
+
+        return () => {
+            map.off("click", "drones-layer", () => {});
+            map.off("click", () => {});
+            map.remove();
+            mapRef.current = null;
+            engineRef.current = null
+        };
+    }, []);
+
+    return (
+        <>
+            <div id="map-container" ref={mapContainerRef} />
+
+            {selectedDrone && (
+                <div className="drone-panel">
+                    <h3>Drone: {selectedDrone.id}</h3>
+                    <p>Side: {selectedDrone.side}</p>
+                    <p>
+                        Position: {selectedDrone.position[0].toFixed(4)}, {" "} {selectedDrone.position[0].toFixed(4)}
+                    </p>
+                    <button onClick={() => setSelectedDrone(null)}>Close</button>
+                </div>
+            )}
+        </> 
+    );
+}
