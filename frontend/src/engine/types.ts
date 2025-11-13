@@ -13,7 +13,7 @@ export interface DroneEntity {
     id: string;
     position: LngLat;
     side: DroneSide;
-
+    pathParam: number;
 }
 
 export interface WorldState {

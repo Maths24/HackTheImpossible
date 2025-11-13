@@ -1,39 +1,39 @@
 import type { WorldState, DroneEntity, DroneSide, LngLat } from "./types";
 
 // Helper to create a drone
-const makeDrone = (id: number, position: LngLat, side: DroneSide): DroneEntity => ({
-  id: `drone-${id}`,
-  position,
-  side
+const makeDrone = (
+    id: number, 
+    position: LngLat, 
+    side: DroneSide,
+    pathParam: number
+): DroneEntity => ({
+    id: `drone-${id}`,
+    position,
+    side,
+    pathParam
 });
 
 // Create sample drones around New York
 // Later, this data will come from backend
 export const createInitialWorldState = (): WorldState => {
-    const base: LngLat = [-74.0, 40.7];
-    const base2: LngLat = [12.35, 48.06];
+  const base: LngLat = [-74.0, 40.7];
+  const drones: DroneEntity[] = [];
+  const count = 20;
 
-    const drones: DroneEntity[] = [];
+  for (let i = 0; i < count; i++) {
+    const offsetLng = (Math.random() - 0.5) * 0.05;
+    const offsetLat = (Math.random() - 0.5) * 0.05;
+    const p0: LngLat = [base[0] + offsetLng, base[1] + offsetLat];
 
-    for (let i = 0; i < 200; i++) {
-        const offsetLng = (Math.random() - 0.5) * 0.2;
-        const offsetLat = (Math.random() - 0.5) * 0.2;
+    drones.push(
+      makeDrone(
+        i,
+        p0,
+        i % 2 === 0 ? "friendly" : "enemy",
+        i / count // spread 0..1 around the loop
+      )
+    );
+  }
 
-        drones.push(
-            makeDrone(
-                i,
-                [base[0] + offsetLng, base[1] + offsetLat],
-                i % 3 === 0 ? "friendly" : "enemy"
-            )
-        );
-        drones.push(
-            makeDrone(
-                i+300,
-                [base2[0] + offsetLng, base2[1] + offsetLat],
-                i % 2 === 0 ? "friendly" : "enemy"
-            )
-        );
-    }
-
-    return { drones };
-}
+  return { drones };
+};
