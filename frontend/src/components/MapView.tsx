@@ -93,8 +93,8 @@ export const MapView = () => {
       }
     });
 
-    map.addControl(new mapboxgl.NavigationControl(), "top-right");
-    map.addControl(draw, "top-left"); 
+    map.addControl(new mapboxgl.NavigationControl(), "bottom-right");
+    map.addControl(draw, "bottom-left"); 
     drawRef.current = draw;
 
     const handleDrawChange = () => {

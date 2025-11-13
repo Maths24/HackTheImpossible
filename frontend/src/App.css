@@ -63,3 +63,36 @@
   border: none;
   cursor: pointer;
 }
+
+.status-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  padding: 0 12px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  background: rgba(10, 18, 28, 0.9);
+  color: white;
+  font-size: 12px;
+  font-family: system-ui, -apple-system, sans-serif;
+
+  z-index: 10;
+  pointer-events: none;
+}
+
+.status-left,
+.status-center,
+.status-right {
+  pointer-events: none;
+}
+
+.status-center {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}

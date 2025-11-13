@@ -1,12 +1,11 @@
 import './App.css'
-import { MapView } from './components/MapView';
+import { MainView } from './components/MainView';
 
 function App() {
 
-
   return (
     <>
-      <MapView />
+      <MainView />
     </>
   )
 }
