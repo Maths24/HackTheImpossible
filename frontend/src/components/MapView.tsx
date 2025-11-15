@@ -10,14 +10,24 @@ import { createInitialWorldState } from "../engine/worldState";
 import { createDronesLayerDescriptor } from "../engine/dronesLayer";
 import type { WorldState, DroneEntity, LngLat } from "../engine/types";
 
-const PATH_SPEED = 0.01;
+const PATH_SPEED = 0.05;
 
-export const MapView = () => {
+// Home base near (your area)
+const KYIV_BASE: LngLat = [36.3694, 47.5931];
+
+type MapViewProps = {
+  targetCenter: [number, number] | null;
+};
+
+export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<RenderEngine | null>(null);
   const worldRef = useRef<WorldState>(createInitialWorldState());
   const [selectedDrone, setSelectedDrone] = useState<DroneEntity | null>(null);
+
+  // Track if we've registered the drones layer yet
+  const dronesLayerRegisteredRef = useRef(false);
 
   // Draw & path refs
   const drawRef = useRef<MapboxDraw | null>(null);
@@ -27,6 +37,11 @@ export const MapView = () => {
 
   const animationFrameRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number | null>(null);
+
+  // Für die Formation:
+  const baseParamRef = useRef<number>(0);       // Leader-Position auf dem Pfad (0..1)
+  const simTimeRef = useRef<number>(0);         // Simulationszeit in Sekunden
+  const hasRemovedRef = useRef<boolean>(false); // Haben wir schon eine Drohne „gekilled“?
 
   // Path helpers
   const precomputePath = (path: LngLat[]) => {
@@ -80,8 +95,8 @@ export const MapView = () => {
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: "mapbox://styles/mapbox/streets-v12",
-      center: [-74.0, 40.7],
-      zoom: 9
+      center: KYIV_BASE,
+      zoom: 11
     });
 
     // Mapbox Draw
@@ -94,7 +109,7 @@ export const MapView = () => {
     });
 
     map.addControl(new mapboxgl.NavigationControl(), "bottom-right");
-    map.addControl(draw, "bottom-left"); 
+    map.addControl(draw, "bottom-left");
     drawRef.current = draw;
 
     const handleDrawChange = () => {
@@ -102,7 +117,7 @@ export const MapView = () => {
       if (!d.features.length) {
         pathRef.current = [];
         segmentLengthsRef.current = [];
-        totalLengthRef.current = 0; 
+        totalLengthRef.current = 0;
         return;
       }
 
@@ -119,6 +134,14 @@ export const MapView = () => {
 
       pathRef.current = path;
       precomputePath(path);
+
+      // Erste Polygon-Zeichnung: Drohnen-Layer registrieren
+      const engine = engineRef.current;
+      if (engine && !dronesLayerRegisteredRef.current) {
+        engine.registerLayer(createDronesLayerDescriptor());
+        dronesLayerRegisteredRef.current = true;
+        engine.update({ zoom: map.getZoom() });
+      }
     };
 
     map.on("draw.create", handleDrawChange);
@@ -126,17 +149,73 @@ export const MapView = () => {
     map.on("draw.delete", handleDrawChange);
 
     map.on("load", () => {
-      // Initialize render engine with initial world state
+      // RenderEngine initialisieren
       const engine = new RenderEngine(map, worldRef.current);
       engineRef.current = engine;
 
-      // Register drones layer
-      engine.registerLayer(createDronesLayerDescriptor());
+      // Home-Base Marker
+      const baseEl = document.createElement("div");
+      baseEl.className = "base-marker";
 
-      // Initial render
-      engine.update({ zoom: map.getZoom() });
+      new mapboxgl.Marker({ element: baseEl })
+        .setLngLat(KYIV_BASE)
+        .addTo(map);
 
-      // Click handler for drones
+      // Animationsloop
+      const animate = (timestamp: number) => {
+        if (lastTimeRef.current == null) {
+          lastTimeRef.current = timestamp;
+        }
+        const dt = (timestamp - lastTimeRef.current) / 1000; // seconds
+        lastTimeRef.current = timestamp;
+
+        simTimeRef.current += dt;
+
+        const engineLocal = engineRef.current;
+        const total = totalLengthRef.current;
+
+        if (engineLocal && dt > 0 && total > 0 && dronesLayerRegisteredRef.current) {
+          let world = worldRef.current;
+
+          // Demo: nach 8 Sekunden fällt Drohne an Position 3 aus
+          if (!hasRemovedRef.current && simTimeRef.current > 8 && world.drones.length > 4) {
+            const removedIndex = 3; // „3. Drohne fällt aus“
+            const newDrones = world.drones.filter((_, idx) => idx !== removedIndex);
+            world = { ...world, drones: newDrones };
+            worldRef.current = world;
+            hasRemovedRef.current = true;
+          }
+
+          const n = world.drones.length;
+          if (n > 1) {
+            // Leader bewegt sich entlang des Pfads
+            baseParamRef.current = (baseParamRef.current + PATH_SPEED * dt) % 1;
+
+            const updatedDrones: DroneEntity[] = world.drones.map((d, idx) => {
+              // gleichmäßiger Abstand auf dem Pfad: f_i = (Leader + idx/n)
+              const f = (baseParamRef.current + idx / n) % 1;
+              const pos = pointAtFraction(f);
+              if (!pos) return d;
+              return {
+                ...d,
+                pathParam: f,
+                position: pos
+              };
+            });
+
+            const newWorld: WorldState = { ...world, drones: updatedDrones };
+            worldRef.current = newWorld;
+            engineLocal.setWorldState(newWorld);
+            engineLocal.update({ zoom: map.getZoom() });
+          }
+        }
+
+        animationFrameRef.current = requestAnimationFrame(animate);
+      };
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+
+      // Click handler für Drohnen
       map.on("click", "drones-layer", (e) => {
         const feature = e.features?.[0];
         if (!feature || !feature.properties) return;
@@ -149,7 +228,7 @@ export const MapView = () => {
         setSelectedDrone(drone);
       });
 
-      // Clicking empty map clears selection
+      // Klick auf leere Karte -> Auswahl löschen
       map.on("click", (e) => {
         const features = map.queryRenderedFeatures(e.point, {
           layers: ["drones-layer"]
@@ -158,46 +237,9 @@ export const MapView = () => {
           setSelectedDrone(null);
         }
       });
-
-      // Animation
-      const animate = (timestamp: number) => {
-        if (lastTimeRef.current == null) {
-          lastTimeRef.current = timestamp;
-        }
-        const dt = (timestamp - lastTimeRef.current) / 1000; // seconds
-        lastTimeRef.current = timestamp;
-
-        const engine = engineRef.current;
-        const total = totalLengthRef.current;
-
-        if (engine && dt > 0 && total > 0) {
-          const world = worldRef.current;
-          const speed = PATH_SPEED;
-
-          const updatedDrones = world.drones.map((d) => {
-            const nextParam = (d.pathParam + speed * dt) % 1;
-            const pos = pointAtFraction(nextParam);
-            if (!pos) return d;
-            return {
-              ...d,
-              pathParam: nextParam,
-              position: pos
-            };
-          });
-
-          const newWorld: WorldState = { ...world, drones: updatedDrones };
-          worldRef.current = newWorld;
-          engine.setWorldState(newWorld);
-          engine.update({ zoom: map.getZoom() });
-        }
-
-        animationFrameRef.current = requestAnimationFrame(animate);
-      };
-
-      animationFrameRef.current = requestAnimationFrame(animate);
     });
 
-    // Update engine on zoom changes
+    // Engine bei Zoom-Änderung updaten
     map.on("zoom", () => {
       const engine = engineRef.current;
       if (!engine) return;
@@ -218,6 +260,17 @@ export const MapView = () => {
       engineRef.current = null;
     };
   }, []);
+
+  // Fly to searched target from MainView
+  useEffect(() => {
+    if (!mapRef.current || !targetCenter) return;
+
+    mapRef.current.flyTo({
+      center: targetCenter,
+      zoom: 11,
+      essential: true
+    });
+  }, [targetCenter]);
 
   return (
     <>

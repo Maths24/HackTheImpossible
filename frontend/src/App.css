@@ -11,6 +11,7 @@
   width: 100%;
   /* temporarily set the background color so we can tell where the map container is positioned */
   background-color: lightgrey;
+  z-index: 0;
 }
 
 .sidebar {
@@ -71,6 +72,7 @@
   right: 0;
   height: 32px;
   padding: 0 12px;
+  z-index: 10;
 
   display: flex;
   align-items: center;
@@ -82,17 +84,58 @@
   font-family: system-ui, -apple-system, sans-serif;
 
   z-index: 10;
-  pointer-events: none;
+
 }
 
 .status-left,
 .status-center,
 .status-right {
-  pointer-events: none;
+
 }
 
 .status-center {
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+}
+
+.status-search input {
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: none;
+  font-size: 12px;
+
+}
+
+.status-search button {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.status-search-error {
+  color: #ff6b6b;
+  font-size: 11px;
+}
+
+.base-marker {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #aa00ff 0%, #2f007a 60%, #220033 100%);
+  border: 2px solid white;
+  box-shadow: 0 0 10px rgba(170, 0, 255, 0.8);
+  position: relative;
+}
+
+.base-marker::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.7);
 }

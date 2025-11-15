@@ -17,8 +17,11 @@ export interface DroneEntity {
 }
 
 export interface WorldState {
-    drones: DroneEntity[];
-    // you can add other entities later, like hazards, frontlines, vehicles
+  drones: DroneEntity[];
+  homeBase: {
+    position: LngLat;
+    rangeKm: number;   // or rangeMeters
+  };
 }
 
 // Generic layer description

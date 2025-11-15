@@ -1,5 +1,5 @@
 import mapboxgl, { type CircleLayerSpecification } from "mapbox-gl";
-import type { FeatureCollection, Point } from "geojson";
+import type { FeatureCollection, Point, Polygon, LineString } from "geojson";
 import type { LayerDescriptor, WorldState } from "./types";
 
 export interface ViewContext {
@@ -81,6 +81,12 @@ export class RenderEngine {
 
         if (kind === "point") {
             const fc: FeatureCollection<Point> = dataSelector(this.world);
+            source.setData(fc);
+        } else if (kind === "polygon") {
+            const fc = dataSelector(this.world) as FeatureCollection<Polygon>;
+            source.setData(fc);
+        } else if (kind === "line") {
+            const fc = dataSelector(this.world) as FeatureCollection<LineString>;
             source.setData(fc);
         }
     }

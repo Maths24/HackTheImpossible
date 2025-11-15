@@ -1,5 +1,7 @@
 import type { WorldState, DroneEntity, DroneSide, LngLat } from "./types";
 
+
+
 // Helper to create a drone
 const makeDrone = (
     id: number, 
@@ -12,6 +14,8 @@ const makeDrone = (
     side,
     pathParam
 });
+
+
 
 // Create sample drones around New York
 // Later, this data will come from backend
@@ -35,5 +39,11 @@ export const createInitialWorldState = (): WorldState => {
     );
   }
 
-  return { drones };
+  return { 
+    drones,
+    homeBase: {
+      position: base,
+      rangeKm: 20                  
+    } 
+  };
 };
