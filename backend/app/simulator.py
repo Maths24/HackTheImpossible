@@ -1,6 +1,9 @@
 # app/core/simulator.py
 from __future__ import annotations
 from typing import List, Optional
+import math
+import random  # <--- ADD THIS
+
 from .models import (
     LngLat,
     DroneDTO,
@@ -45,8 +48,237 @@ class Simulator:
         self.time_to_area: float = 30.0       # 30s flight base → center (tune)
         self.next_launch_index: int = 0       # which drone from pool to launch next
 
+        # swarm parameters inside polygon
+        self.neighbor_gain: float = 0.5       # how strongly drones react to neighbors
+        self.center_gain: float = 0.05        # how strongly they are pulled to polygon center
+        self.max_speed_deg_per_sec: float = 0.001  # max position change in degrees per second
+
     # -------------------------------------------------
-    # This is the function you asked for
+    # Utility: distance between two positions (in degrees)
+    # (good enough for local behavior in a small polygon)
+    # -------------------------------------------------
+    @staticmethod
+    def _distance(a: LngLat, b: LngLat) -> float:
+        dx = a.lng - b.lng
+        dy = a.lat - b.lat
+        return math.sqrt(dx * dx + dy * dy)
+
+    # -------------------------------------------------
+    # Very simple point-in-polygon (ray casting)
+    # Used only to keep drones roughly inside the area.
+    # -------------------------------------------------
+    @staticmethod
+    def _point_in_polygon(p: LngLat, poly: List[LngLat]) -> bool:
+        inside = False
+        n = len(poly)
+        if n < 3:
+            return False
+
+        x, y = p.lng, p.lat
+        for i in range(n):
+            j = (i - 1) % n
+            xi, yi = poly[i].lng, poly[i].lat
+            xj, yj = poly[j].lng, poly[j].lat
+
+            intersect = ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+            )
+            if intersect:
+                inside = not inside
+        return inside
+
+    # -------------------------------------------------
+    # Compute a "target spacing" from polygon size + number of patrol drones
+    # This is heuristic, but good enough for a demo.
+    # -------------------------------------------------
+    def _desired_spacing(self, patrol_indices: List[int]) -> float:
+        if not self.patrol_polygon or len(patrol_indices) <= 1:
+            return 0.001  # tiny default
+
+        xs = [p.lng for p in self.patrol_polygon]
+        ys = [p.lat for p in self.patrol_polygon]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        n = len(patrol_indices)
+
+        # Rough idea: area ~ width*height, spacing ~ sqrt(area / n)
+        area_est = max(width * height, 1e-9)
+        return 0.5 * math.sqrt(area_est / n)
+
+    # -------------------------------------------------
+    # Local swarm behavior inside the polygon:
+    # each PATROL drone looks at its two nearest PATROL neighbors
+    # and moves to equalize the distance, plus weak pull to center.
+    # -------------------------------------------------
+    def _update_patrol_swarm(self, dt: float) -> None:
+        if not self.patrol_polygon or not self.patrol_center:
+            return
+
+        # indices of patrol drones
+        patrol_indices = [i for i, d in enumerate(self.drones) if d.mode == "PATROL"]
+        if len(patrol_indices) == 0:
+            return
+
+        desired = self._desired_spacing(patrol_indices)
+        if desired <= 0:
+            return
+
+        # store new positions separately so updates are "synchronous"
+        new_positions: List[LngLat] = [d.position for d in self.drones]
+
+        cx, cy = self.patrol_center.lng, self.patrol_center.lat
+
+        for idx in patrol_indices:
+            d = self.drones[idx]
+            px, py = d.position.lng, d.position.lat
+
+            # find two nearest patrol neighbors
+            distances: List[tuple[float, int]] = []
+            for j in patrol_indices:
+                if j == idx:
+                    continue
+                dist = self._distance(d.position, self.drones[j].position)
+                distances.append((dist, j))
+
+            distances.sort(key=lambda x: x[0])
+            neighbors = [j for (dist, j) in distances[:2]]
+
+            fx = 0.0
+            fy = 0.0
+
+            # --- neighbor spacing forces (FIXED SIGN) ---
+            for j in neighbors:
+                neighbor = self.drones[j]
+                nx, ny = neighbor.position.lng, neighbor.position.lat
+
+                # vector from self -> neighbor
+                dx = nx - px
+                dy = ny - py
+                dist = math.sqrt(dx * dx + dy * dy) + 1e-9
+
+                # if dist > desired  -> pull towards neighbor (reduce gap)
+                # if dist < desired  -> push away (increase gap)
+                factor = (dist - desired) / dist
+
+                fx += self.neighbor_gain * factor * dx
+                fy += self.neighbor_gain * factor * dy
+
+            # --- weak pull towards polygon center so they don't drift out ---
+            fx += self.center_gain * (cx - px)
+            fy += self.center_gain * (cy - py)
+
+            # --- tiny random jitter so they don't get stuck on top of each other ---
+            jitter = 0.00005
+            fx += jitter * (random.random() - 0.5)
+            fy += jitter * (random.random() - 0.5)
+
+            # limit speed
+            speed = math.sqrt(fx * fx + fy * fy)
+            max_step = self.max_speed_deg_per_sec
+            if speed > 0:
+                scale = min(max_step, speed) / speed
+                fx *= scale
+                fy *= scale
+
+            new_x = px + fx * dt
+            new_y = py + fy * dt
+            new_pos = LngLat(lng=new_x, lat=new_y)
+
+            # keep roughly inside polygon – if we leave, pull back towards center
+            if not self._point_in_polygon(new_pos, self.patrol_polygon):
+                new_pos = LngLat(
+                    lng=(px + cx) * 0.5,
+                    lat=(py + cy) * 0.5,
+                )
+
+            new_positions[idx] = new_pos
+
+        # apply new positions
+        for i in patrol_indices:
+            self.drones[i].position = new_positions[i]
+        if not self.patrol_polygon or not self.patrol_center:
+            return
+
+        # indices of patrol drones
+        patrol_indices = [i for i, d in enumerate(self.drones) if d.mode == "PATROL"]
+        if len(patrol_indices) == 0:
+            return
+
+        desired = self._desired_spacing(patrol_indices)
+        if desired <= 0:
+            return
+
+        # store new positions separately so updates are "synchronous"
+        new_positions: List[LngLat] = [d.position for d in self.drones]
+
+        cx, cy = self.patrol_center.lng, self.patrol_center.lat
+
+        for idx in patrol_indices:
+            d = self.drones[idx]
+            px, py = d.position.lng, d.position.lat
+
+            # find two nearest patrol neighbors
+            distances: List[tuple[float, int]] = []
+            for j in patrol_indices:
+                if j == idx:
+                    continue
+                dist = self._distance(d.position, self.drones[j].position)
+                distances.append((dist, j))
+
+            distances.sort(key=lambda x: x[0])
+            neighbors = [j for (_, j) in distances[:2]]
+
+            # accumulate "forces"
+            fx = 0.0
+            fy = 0.0
+
+            # neighbor spacing forces
+            for j in neighbors:
+                neighbor = self.drones[j]
+                nx, ny = neighbor.position.lng, neighbor.position.lat
+                dx = px - nx
+                dy = py - ny
+                dist = math.sqrt(dx * dx + dy * dy) + 1e-9
+
+                # positive if we are too close, negative if we are too far
+                # factor = (desired - dist) / dist
+                factor = (desired - dist) / dist
+
+                fx += self.neighbor_gain * factor * dx
+                fy += self.neighbor_gain * factor * dy
+
+            # weak pull towards polygon center so they don't drift out
+            fx += self.center_gain * (cx - px)
+            fy += self.center_gain * (cy - py)
+
+            # limit speed
+            speed = math.sqrt(fx * fx + fy * fy)
+            max_step = self.max_speed_deg_per_sec
+            if speed > 0:
+                scale = min(max_step, speed) / speed
+                fx *= scale
+                fy *= scale
+
+            new_x = px + fx * dt
+            new_y = py + fy * dt
+            new_pos = LngLat(lng=new_x, lat=new_y)
+
+            # keep roughly inside polygon – if we leave, pull back towards center
+            if not self._point_in_polygon(new_pos, self.patrol_polygon):
+                # simple: move halfway towards center instead
+                new_pos = LngLat(
+                    lng=(px + cx) * 0.5,
+                    lat=(py + cy) * 0.5,
+                )
+
+            new_positions[idx] = new_pos
+
+        # apply new positions
+        for i in patrol_indices:
+            self.drones[i].position = new_positions[i]
+
+    # -------------------------------------------------
+    # This is the function you asked for (polygon + launch setup)
     # -------------------------------------------------
     def set_patrol_area(self, req: PatrolAreaRequest) -> None:
         """
@@ -98,7 +330,7 @@ class Simulator:
                 d.phase_progress = 0.0
             self.next_launch_index += 1
 
-        # 2) Update all drones according to their mode
+        # 2) Update all drones according to their mode (movement between phases)
         for d in self.drones:
             if d.mode == "TRANSIT_TO_AREA":
                 # move from base → center over time_to_area seconds
@@ -115,21 +347,25 @@ class Simulator:
 
                 if d.phase_progress >= 1.0:
                     d.mode = "PATROL"
-                    d.path_param = 0.0  # you can now use this for your intra-polygon patrol logic
+                    d.path_param = 0.0  # now used only as a dummy progress value
+
             elif d.mode == "PATROL" and d.battery < 0.2:
                 d.mode = "CHARGING"
                 d.phase_progress = 0.0
-            elif d.mode == "PATROL":
-                # here you later add your “spread evenly in polygon / random walk” logic
-                # for now, just slowly move path_param so it looks alive
-                d.path_param = (d.path_param + 0.05 * dt) % 1.0
 
-            # (RETURNING, CHARGING etc. go here later)
+            elif d.mode == "PATROL":
+                # battery drain while on patrol
+                d.battery = max(0.0, d.battery - 0.01 * dt)
+
+            # (RETURNING, CHARGING etc. can be added here later)
+
+        # 3) Local swarm behavior for PATROL drones inside the polygon
+        self._update_patrol_swarm(dt)
 
     def get_world_state(self) -> WorldStateResponse:
         return WorldStateResponse(
             drones=self.drones,
             home_base=self.home_base,
         )
-    
+
 simulator = Simulator()
