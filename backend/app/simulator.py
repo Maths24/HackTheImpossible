@@ -16,10 +16,10 @@ from .models import (
 
 class Simulator:
     def __init__(self) -> None:
-        # ---------------- world setup ----------------
+        # ---------------- world setup ----------------36.255577, 47.464746
         self.home_base = HomeBaseDTO(
             id="home-1",
-            position=LngLat(lng=36.3694, lat=47.5931),
+            position=LngLat(lng=36.255577, lat=47.464746),
         )
 
         # pool of drones at base
@@ -31,7 +31,7 @@ class Simulator:
                     position=self.home_base.position,
                     side="friendly",
                     path_param=0.0,
-                    battery=1.0,
+                    battery=1.0 + random.random() * 0.5,
                     mode="IDLE_AT_BASE",
                     phase_progress=0.0,
                 )
@@ -44,25 +44,33 @@ class Simulator:
         self.patrol_polygon: Optional[List[LngLat]] = None
         self.patrol_center: Optional[LngLat] = None
         self.num_active: int = 0  # target number of active drones in the field
+        self.has_patrol_area: bool = False  # to distinguish first vs reshape
 
         # launch schedule
-        self.launch_interval: float = 3.0   # seconds between launches
+        self.launch_interval: float = 1.0   # seconds between launches (initial + backup)
         self.time_to_area: float = 5.0      # flight time base → center (seconds)
 
         # global launch timing (for all launches)
         self.last_launch_time: float = -1e9  # so first launch can happen immediately
 
         # swarm parameters inside polygon
-        self.neighbor_gain: float = 0.5            # how strongly drones react to neighbors
-        self.center_gain: float = 0.0              # pull to polygon center (0 = off)
+        self.neighbor_gain: float = 0.5           # how strongly drones react to neighbors
+        self.center_gain: float = 0.0             # pull to polygon center (0 = off)
         self.max_speed_deg_per_sec: float = 0.001  # max position change (deg/sec)
 
         # event stream (for UI)
         self.events: List[EventDTO] = []
         self.next_event_id: int = 0
 
+        # scripted demo behavior
+        self.alert_drone_id: str = "drone-1"
+        self.lost_drone_id: str = "drone-2"
+        self.alert_triggered: bool = False
+        self.lost_triggered: bool = False
+        self.alert_position: Optional[LngLat] = None
+
     # -------------------------------------------------
-    # Utility helpers
+    # Utility: distance between two positions (in degrees)
     # -------------------------------------------------
     @staticmethod
     def _distance(a: LngLat, b: LngLat) -> float:
@@ -70,9 +78,18 @@ class Simulator:
         dy = a.lat - b.lat
         return math.sqrt(dx * dx + dy * dy)
 
-    def _push_event(self, drone_id: str, evt_type: str, position: LngLat, message: str) -> None:
+    # -------------------------------------------------
+    # Push an event into the event buffer
+    # -------------------------------------------------
+    def _push_event(
+        self,
+        drone_id: str,
+        evt_type: str,
+        position: LngLat,
+        message: str,
+    ) -> None:
         """
-        evt_type: "SUSPICIOUS" | "LOST" | "RECHARGING"
+        evt_type e.g.: "SUSPICIOUS", "LOST", "RECHARGING"
         """
         evt = EventDTO(
             id=f"evt-{self.next_event_id}",
@@ -90,6 +107,9 @@ class Simulator:
         if len(self.events) > MAX_EVENTS:
             self.events = self.events[-MAX_EVENTS:]
 
+    # -------------------------------------------------
+    # Very simple point-in-polygon (ray casting)
+    # -------------------------------------------------
     @staticmethod
     def _point_in_polygon(p: LngLat, poly: List[LngLat]) -> bool:
         inside = False
@@ -111,11 +131,11 @@ class Simulator:
         return inside
 
     # -------------------------------------------------
-    # Swarm spacing helpers
+    # Heuristic desired spacing from polygon size + #patrol drones
     # -------------------------------------------------
     def _desired_spacing(self, patrol_indices: List[int]) -> float:
         if not self.patrol_polygon or len(patrol_indices) <= 1:
-            return 0.001
+            return 0.001  # tiny default
 
         xs = [p.lng for p in self.patrol_polygon]
         ys = [p.lat for p in self.patrol_polygon]
@@ -126,6 +146,10 @@ class Simulator:
         area_est = max(width * height, 1e-9)
         return 0.5 * math.sqrt(area_est / n)
 
+    # -------------------------------------------------
+    # Local swarm behavior inside polygon:
+    # PATROL drones repel neighbors (Poisson-disc-ish)
+    # -------------------------------------------------
     def _update_patrol_swarm(self, dt: float) -> None:
         """
         2D swarm spacing inside the polygon.
@@ -147,12 +171,19 @@ class Simulator:
             return
 
         K_NEIGHBORS = 5  # how many neighbors each drone considers
+
         new_positions: List[LngLat] = [d.position for d in self.drones]
 
         cx, cy = self.patrol_center.lng, self.patrol_center.lat
 
         for idx in patrol_indices:
             d = self.drones[idx]
+
+            # DEMO: keep the alert drone hovering at its alert position once triggered
+            if self.alert_triggered and d.id == self.alert_drone_id and self.alert_position:
+                new_positions[idx] = self.alert_position
+                continue
+
             px, py = d.position.lng, d.position.lat
 
             fx = 0.0
@@ -170,6 +201,8 @@ class Simulator:
             for dist, j in distances[:K_NEIGHBORS]:
                 if dist < 1e-9:
                     continue
+
+                # only react if closer than 1.5 * desired
                 if dist >= 1.5 * desired:
                     continue
 
@@ -181,6 +214,7 @@ class Simulator:
                 ux = vx * inv
                 uy = vy * inv
 
+                # repulsion strength: stronger when close, fades out
                 strength = (1.5 * desired - dist) / (1.5 * desired)
                 fx += self.neighbor_gain * strength * ux
                 fy += self.neighbor_gain * strength * uy
@@ -223,13 +257,12 @@ class Simulator:
     # -------------------------------------------------
     def set_patrol_area(self, req: PatrolAreaRequest) -> None:
         """
-        - On FIRST polygon: full reset (fresh mission).
-        - On later updates: only change polygon/center/num_active,
-          keep drones in the air and let swarm adapt.
-        """
-        first_time = self.patrol_polygon is None
+        Stores polygon, computes its center.
 
-        # store polygon + num_active
+        - On first call: full mission reset (drones back to base, events cleared).
+        - On later calls: only the polygon + center change; drones keep flying
+          and adapt to the new area via swarm logic.
+        """
         self.patrol_polygon = req.polygon
         self.num_active = req.num_active
 
@@ -241,23 +274,36 @@ class Simulator:
         else:
             self.patrol_center = None
 
-        if not first_time:
-            # just reshape the mission; drones will adapt via swarm logic
-            return
+        # ---- First time: full reset ----
+        if not self.has_patrol_area:
+            self.has_patrol_area = True
 
-        # ---------- FIRST polygon: full reset ----------
-        self.sim_time = 0.0
-        self.last_launch_time = -1e9  # allow immediate first launch
+            # reset timing
+            self.sim_time = 0.0
+            self.last_launch_time = -1e9  # allow immediate first launch
 
-        for d in self.drones:
-            d.position = self.home_base.position
-            d.mode = "IDLE_AT_BASE"
-            d.phase_progress = 0.0
-            d.path_param = 0.0
-            d.battery = 1.0
+            # reset drones to base
+            for d in self.drones:
+                d.position = self.home_base.position
+                d.mode = "IDLE_AT_BASE"
+                d.phase_progress = 0.0
+                d.path_param = 0.0
+                d.battery = 1.0
 
-        self.events.clear()
-        self.next_event_id = 0
+            # DEMO: drone-0 starts at 40% battery so it returns early
+            if self.drones:
+                self.drones[0].battery = 0.4
+
+            # reset events & scripted flags
+            self.events.clear()
+            self.next_event_id = 0
+            self.alert_triggered = False
+            self.lost_triggered = False
+            self.alert_position = None
+        # ---- Subsequent calls: polygon reshape mid-mission ----
+        else:
+            # nothing else: drones keep their state and will adapt to new polygon
+            pass
 
     # -------------------------------------------------
     # Simulation step – call this regularly (e.g. from /api/world-state)
@@ -265,7 +311,7 @@ class Simulator:
     def step(self, dt: float) -> None:
         self.sim_time += dt
 
-        if not self.patrol_center:
+        if not self.patrol_center or not self.patrol_polygon:
             return  # nothing to do yet
 
         # 1) Maintain desired number of active drones with launch spacing
@@ -274,8 +320,11 @@ class Simulator:
         active_count = sum(1 for d in self.drones if d.mode in ACTIVE_MODES)
         shortage = max(0, self.num_active - active_count)
 
-        if shortage > 0 and (self.sim_time - self.last_launch_time) >= self.launch_interval:
-            # launch exactly one new drone (initial wave or backup)
+        if (
+            shortage > 0
+            and (self.sim_time - self.last_launch_time) >= self.launch_interval
+        ):
+            # launch exactly one new drone (initial wave or backup) every launch_interval
             for d in self.drones:
                 if d.mode == "IDLE_AT_BASE":
                     d.mode = "TRANSIT_TO_AREA"
@@ -285,7 +334,7 @@ class Simulator:
 
         # 2) Move drones and handle per-mode logic
         for d in self.drones:
-            # LOST drones stay at last known position
+            # LOST drones stay where they are (last known position)
             if d.mode == "LOST":
                 continue
 
@@ -304,10 +353,11 @@ class Simulator:
                 d.position = new_pos
 
                 # as soon as the drone enters the polygon, it joins the swarm
-                if self.patrol_polygon and self._point_in_polygon(new_pos, self.patrol_polygon):
+                if self._point_in_polygon(new_pos, self.patrol_polygon):
                     d.mode = "PATROL"
                     d.path_param = 0.0
 
+                # fallback: if it never hits polygon but reaches center time
                 elif d.phase_progress >= 1.0:
                     d.mode = "PATROL"
                     d.path_param = 0.0
@@ -316,14 +366,36 @@ class Simulator:
                 # battery drain while on patrol
                 d.battery = max(0.0, d.battery - 0.01 * dt)
 
-                # random "suspicious" event for demo purposes
-                if self.patrol_polygon and random.random() < 0.001 * dt:
+                # --- scripted suspicious event for demo (hover) ---
+                if (
+                    d.id == self.alert_drone_id
+                    and not self.alert_triggered
+                    and self.sim_time > 15.0  # trigger after ~15s
+                ):
+                    self.alert_triggered = True
+                    self.alert_position = d.position
                     self._push_event(
                         d.id,
                         "SUSPICIOUS",
                         d.position,
-                        "Suspicious activity detected in patrol area.",
+                        "Suspicious activity detected – drone holding position.",
                     )
+
+                # --- scripted LOST drone for demo ---
+                if (
+                    d.id == self.lost_drone_id
+                    and not self.lost_triggered
+                    and self.sim_time > 25.0  # trigger after ~25s
+                ):
+                    self.lost_triggered = True
+                    d.mode = "LOST"
+                    self._push_event(
+                        d.id,
+                        "LOST",
+                        d.position,
+                        "Drone lost – communication failure.",
+                    )
+                    continue  # LOST now handled at top of loop on next step
 
                 # low-battery → return to base
                 if d.battery < 0.2 and d.battery > 0.0:
@@ -370,12 +442,14 @@ class Simulator:
                 dist = math.sqrt(dx * dx + dy * dy)
 
                 if dist < 1e-6:
+                    # arrived
                     d.position = self.home_base.position
                     d.mode = "CHARGING"
                     d.phase_progress = 0.0
                 else:
                     step = self.max_speed_deg_per_sec * dt
                     if step >= dist:
+                        # reach base in this step
                         d.position = self.home_base.position
                         d.mode = "CHARGING"
                         d.phase_progress = 0.0
@@ -395,7 +469,7 @@ class Simulator:
                     d.mode = "IDLE_AT_BASE"
                     d.phase_progress = 0.0
 
-            # IDLE_AT_BASE: nothing to do here; launcher logic above will pick them up
+            # IDLE_AT_BASE: nothing to do, will be launched by launcher logic
 
         # 3) Swarm behavior inside polygon (PATROL drones)
         self._update_patrol_swarm(dt)

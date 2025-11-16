@@ -12,7 +12,7 @@ import { createDronesLayerDescriptor } from "../engine/dronesLayer";
 import type { WorldState, DroneEntity, LngLat } from "../engine/types";
 
 // Initial camera over your demo area (Kyiv-ish)
-const KYIV_BASE: LngLat = [36.3694, 47.5931];
+const KYIV_BASE: LngLat = [36.255577, 47.464746];
 
 // Static image for the “what the drone sees” view
 const DRONE_VIEW_IMAGE = "/drone-view-demo.png";

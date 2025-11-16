@@ -34,12 +34,12 @@ export const createDronesLayerDescriptor = (): LayerDescriptor => {
         "match",
         ["get", "side"],
         "friendly",
-        "#00ffff",
+        "#FF5C00",
         "enemy",
         "#ff4b4b",
         /* default */ "#ffffff"
       ],
-      "circle-stroke-color": "#000000",
+      "circle-stroke-color": "#ffffff",
       "circle-stroke-width": 1
     }  // TS nicht zu pingelig sein lassen
   };
