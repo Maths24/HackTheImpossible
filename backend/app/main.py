@@ -1,12 +1,14 @@
+# backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import time
 
 from .models import PatrolAreaRequest, WorldStateResponse
-from .simulator import simulator
+from .simulator import simulator   # global Simulator instance
 
 app = FastAPI(title="HackTheImpossible Drone Backend")
 
-# Allow your Vite dev server to talk to FastAPI
+# Allow your Vite dev server to call the API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -18,22 +20,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
 
 @app.post("/api/patrol/area", response_model=WorldStateResponse)
 def set_patrol_area(body: PatrolAreaRequest) -> WorldStateResponse:
     """
     Called by frontend when operator draws/updates the patrol polygon.
+    - stores polygon + center
+    - resets drones to base
+    - schedules launches (handled inside simulator)
     """
     simulator.set_patrol_area(body)
-    # immediately return first world state
-    simulator.step(dt=0.01)  # tiny step to place them nicely
     return simulator.get_world_state()
 
+
+# ---- NEW: world-state endpoint that advances the simulation ----
+_last_step_time = time.perf_counter()
 
 @app.get("/api/world-state", response_model=WorldStateResponse)
 def get_world_state() -> WorldStateResponse:
     """
-    Called by frontend ~every 300–500 ms to get updated drone positions.
+    Called regularly by the frontend (polling).
+    Each call advances the simulation by the real time since the last call.
     """
-    simulator.step()  # dt = real time since last call
+    global _last_step_time
+    now = time.perf_counter()
+    dt = now - _last_step_time
+    _last_step_time = now
+
+    simulator.step(dt)
     return simulator.get_world_state()

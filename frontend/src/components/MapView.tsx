@@ -18,26 +18,34 @@ type MapViewProps = {
   targetCenter: [number, number] | null;
 };
 
-// DTO types for the backend responses
+// ---------- DTO types that mirror backend models.py ----------
+
 interface DroneDTO {
   id: string;
   side: "friendly" | "enemy";
   path_param: number;
   battery: number;
   mode: "PATROL" | "RETURNING";
-  position: { lng: number; lat: number };
-  exploration?: number;   // <-- new
+  position: {
+    lng: number;
+    lat: number;
+  };
 }
 
 interface HomeBaseDTO {
   id: string;
-  position: { lng: number; lat: number };
+  position: {
+    lng: number;
+    lat: number;
+  };
 }
 
 interface WorldStateDTO {
   drones: DroneDTO[];
   home_base: HomeBaseDTO;
 }
+
+// ------------------------------------------------------------
 
 export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -49,29 +57,29 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
   const drawRef = useRef<MapboxDraw | null>(null);
   const pollingRef = useRef<number | null>(null);
 
-  // Helper to convert backend DTO → our internal WorldState
+  // Helper: convert backend DTO -> internal WorldState
   const dtoToWorldState = (dto: WorldStateDTO): WorldState => {
-  return {
-    drones: dto.drones.map((d) => ({
-      id: d.id,
-      side: d.side,
-      pathParam: d.path_param,
-      battery: d.battery,
-      mode: d.mode,
-      position: [d.position.lng, d.position.lat] as LngLat,
-      offset: 0,
-      exploration: d.exploration ?? 0   // <-- default to 0 if backend doesn’t send it
-    })),
-    homeBase: {
-      id: dto.home_base.id,
-      position: [
-        dto.home_base.position.lng,
-        dto.home_base.position.lat
-      ] as LngLat
-    }
+    return {
+      drones: dto.drones.map((d): DroneEntity => ({
+        id: d.id,
+        side: d.side,
+        pathParam: d.path_param,
+        battery: d.battery,
+        mode: d.mode,
+        position: [d.position.lng, d.position.lat] as LngLat,
+        offset: 0
+      })),
+      homeBase: {
+        id: dto.home_base.id,
+        position: [
+          dto.home_base.position.lng,
+          dto.home_base.position.lat
+        ] as LngLat
+      }
+    };
   };
-};
 
+  // ---------- Initial map + Draw setup ----------
   useEffect(() => {
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN as string;
     if (!mapContainerRef.current || mapRef.current) return;
@@ -80,22 +88,22 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
       container: mapContainerRef.current,
       style: "mapbox://styles/mapbox/streets-v12",
       center: KYIV_BASE,
-      zoom: 11,
+      zoom: 11
     });
 
     const draw = new MapboxDraw({
       displayControlsDefault: false,
       controls: {
         polygon: true,
-        trash: true,
-      },
+        trash: true
+      }
     });
 
     map.addControl(new mapboxgl.NavigationControl(), "bottom-right");
     map.addControl(draw, "bottom-left");
     drawRef.current = draw;
 
-    // Home base marker (purely visual; backend also knows the base)
+    // Home base marker (visual only – backend also knows the base)
     const baseEl = document.createElement("div");
     baseEl.className = "base-marker";
     new mapboxgl.Marker({ element: baseEl }).setLngLat(KYIV_BASE).addTo(map);
@@ -104,11 +112,12 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
       const engine = new RenderEngine(map, worldRef.current);
       engineRef.current = engine;
 
-      // We always have the drones layer; it will just be empty
+      // Always register drones layer; it will be empty until backend sends drones
       engine.registerLayer(createDronesLayerDescriptor());
       engine.update({ zoom: map.getZoom() });
     });
 
+    // When operator draws/updates/deletes polygon, notify backend
     const handleDrawChange = () => {
       const d = draw.getAll();
       if (!d.features.length) return;
@@ -119,7 +128,7 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
       const coords = feature.geometry.coordinates[0] as [number, number][];
       if (!coords || coords.length < 4) return;
 
-      // Drop duplicate last point from Draw and convert to DTO
+      // Drop duplicate last coordinate from Mapbox Draw ring
       const path: LngLat[] = coords
         .slice(0, -1)
         .map((c) => [c[0], c[1]] as LngLat);
@@ -128,13 +137,13 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
         try {
           const body = {
             polygon: path.map(([lng, lat]) => ({ lng, lat })),
-            num_active: 10, // how many patrol drones you want
+            num_active: 10 // number of drones we want patrolling
           };
 
           const res = await fetch("http://localhost:8000/api/patrol/area", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(body)
           });
 
           if (!res.ok) {
@@ -163,7 +172,7 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
     map.on("draw.update", handleDrawChange);
     map.on("draw.delete", handleDrawChange);
 
-    // Click handler for drones
+    // Click handler: select drone
     map.on("click", "drones-layer", (e) => {
       const feature = e.features?.[0];
       if (!feature || !feature.properties) return;
@@ -176,10 +185,10 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
       setSelectedDrone(drone);
     });
 
-    // Clicking on empty map clears selection
+    // Click empty map: clear selection
     map.on("click", (e) => {
       const features = map.queryRenderedFeatures(e.point, {
-        layers: ["drones-layer"],
+        layers: ["drones-layer"]
       });
       if (!features.length) {
         setSelectedDrone(null);
@@ -206,7 +215,7 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
     };
   }, []);
 
-  // Poll backend world-state regularly
+  // ---------- Poll backend world-state ----------
   useEffect(() => {
     const poll = async () => {
       try {
@@ -228,11 +237,10 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
       }
     };
 
-    // start polling
     const id = window.setInterval(poll, 400); // ~2.5 Hz
     pollingRef.current = id;
 
-    // one immediate poll so you see something fast
+    // immediate first poll
     void poll();
 
     return () => {
@@ -240,14 +248,14 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
     };
   }, []);
 
-  // Fly to searched location from MainView
+  // ---------- Fly to searched location from MainView ----------
   useEffect(() => {
     if (!mapRef.current || !targetCenter) return;
 
     mapRef.current.flyTo({
       center: targetCenter,
       zoom: 11,
-      essential: true,
+      essential: true
     });
   }, [targetCenter]);
 

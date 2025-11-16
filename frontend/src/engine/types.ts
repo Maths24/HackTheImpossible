@@ -21,7 +21,7 @@ export interface DroneEntity {
   mode: DroneMode;
 
   offset: number;
-  exploration: number;   // <-- required field
+  exploration?: number;   // <-- required field
 }
 
 export interface HomeBase {
