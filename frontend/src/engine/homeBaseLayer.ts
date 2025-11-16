@@ -1,3 +1,4 @@
+// src/engine/homeBaseLayer.ts
 import type { FeatureCollection, Point, Feature } from "geojson";
 import type { LayerDescriptor, WorldState } from "./types";
 

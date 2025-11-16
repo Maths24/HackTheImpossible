@@ -31,11 +31,9 @@ export const createRangeCircleLayerDescriptor = (): LayerDescriptor => {
       };
     },
     paint: {
-      // fill + outline: fill via this layer, outline via another if you want,
-      // but one layer is enough for now
       "fill-color": "#00ffc4",
       "fill-opacity": 0.1
-    }
+    } 
   };
 
   return descriptor;

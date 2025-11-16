@@ -1,47 +1,60 @@
-import type { FeatureCollection, Point, /*LineString, Polygon*/ } from "geojson";
-import type { CircleLayerSpecification } from "mapbox-gl";
-
-// Basic geometry types
-export type GeometryKind = "point" | "line" | "polygon";
+// src/engine/types.ts
+import type { FeatureCollection, Geometry } from "geojson";
+import type {
+  CircleLayerSpecification,
+  FillLayerSpecification
+} from "mapbox-gl";
 
 export type LngLat = [number, number];
 
-// Minimal worlds state
 export type DroneSide = "friendly" | "enemy";
 
+export type DroneMode = "PATROL" | "RETURNING"; // fürs Demo reichen 2 Modi
+
 export interface DroneEntity {
-    id: string;
-    position: LngLat;
-    side: DroneSide;
-    pathParam: number;
+  id: string;
+  position: LngLat;
+  side: DroneSide;
+
+  pathParam: number;
+  battery: number;
+  mode: DroneMode;
+
+  offset: number;
+  exploration: number;   // <-- required field
+}
+
+export interface HomeBase {
+  id: string;
+  position: LngLat;
+  rangeKm?: number;   // <-- make it optional
 }
 
 export interface WorldState {
   drones: DroneEntity[];
-  homeBase: {
-    position: LngLat;
-    rangeKm: number;   // or rangeMeters
-  };
+  homeBase: HomeBase;
 }
 
-// Generic layer description
-export interface PointLayerDescriptor {
-    id: string;
-    sourceId: string; // Mapbox source id
-    layerId: string; // Mapbox layer id
-    kind: "point";
-    minZoom?: number;
-    maxZoom?: number;
+// ===== Rendering-Layer-Typen =====
 
-    // Select geo features from world state 
-    dataSelector: (world: WorldState) => FeatureCollection<Point>;
+export type LayerKind = "point" | "polygon";
+export type LayerPaint =
+  | NonNullable<CircleLayerSpecification["paint"]>
+  | NonNullable<FillLayerSpecification["paint"]>;
 
-    // Mapbox circle-layer paint props
-    paint: CircleLayerSpecification["paint"];
+export interface LayerDescriptor {
+  id: string;
+  sourceId: string;
+  layerId: string;
+  kind: LayerKind;
+  minZoom?: number;
+  maxZoom?: number;
+  visibleByDefault?: boolean;
 
-    // Whether this layer is visible in the current "mode"
-    visibleByDefault?: boolean;
+  // welche Daten gerendert werden
+  dataSelector: (world: WorldState) => FeatureCollection<Geometry>;
+
+  // Styling – je nach kind wird daraus ein Circle- oder Fill-Layer gebaut
+  paint: LayerPaint;
+
 }
-
-export type LayerDescriptor = PointLayerDescriptor;
-
