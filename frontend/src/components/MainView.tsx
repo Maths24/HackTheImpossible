@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { MapView } from "./MapView";
 
 export const MainView = () => {
-  const operatorPos: [number, number] = [-73.9857, 40.7484];
+  const operatorPos: [number, number] = [47.5931, 36.3694];
 
   const [timeString, setTimeString] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -77,7 +77,7 @@ export const MainView = () => {
           <span className="status-search">
             <input
               type="text"
-              placeholder="Jump to location (e.g. Lviv)"
+              placeholder="Jump to location"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}

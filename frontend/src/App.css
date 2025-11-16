@@ -39,7 +39,7 @@
 
 .drone-panel {
   position: absolute;
-  top: 12px;
+  top: 50px;
   right: 12px;
   z-index: 2;
   background: rgba(10, 18, 28, 0.95);
@@ -50,6 +50,7 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 13px;
+  opacity: 90%;
 }
 
 .drone-panel h3 {

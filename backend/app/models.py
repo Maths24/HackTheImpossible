@@ -1,7 +1,8 @@
+# app/core/models.py
 from __future__ import annotations
 
-from pydantic import BaseModel
 from typing import List, Literal
+from pydantic import BaseModel
 
 
 class LngLat(BaseModel):
@@ -9,13 +10,14 @@ class LngLat(BaseModel):
     lat: float
 
 
-# All the modes we now need in the sim
+# All possible modes your simulator uses
 DroneMode = Literal[
-    "IDLE_AT_BASE",     # sitting at base, ready to launch
-    "TRANSIT_TO_AREA",  # flying from base to patrol area
-    "PATROL",           # actively patrolling in the area
-    "RETURNING",        # flying back to base
-    "CHARGING",         # on the ground, charging
+    "PATROL",
+    "RETURNING",
+    "IDLE_AT_BASE",
+    "TRANSIT_TO_AREA",
+    "CHARGING",
+    "LOST",
 ]
 
 
@@ -23,37 +25,41 @@ class DroneDTO(BaseModel):
     id: str
     position: LngLat
     side: Literal["friendly", "enemy"]
-
-    # 1D-coordinate along whatever path/corridor you use (0..1)
     path_param: float
-
-    # battery 0..1
     battery: float
-
-    # lifecycle / behaviour state
     mode: DroneMode
 
-    # progress 0..1 of current phase (e.g. base → area, area → base)
+    # <-- NEW: needed by simulator for phase progress in different states
     phase_progress: float = 0.0
 
 
 class HomeBaseDTO(BaseModel):
     id: str
     position: LngLat
-    # optional, but often useful
-    range_km: float | None = None
+
+
+class EventDTO(BaseModel):
+    """
+    Event emitted by simulator for UI:
+    - SUSPICIOUS: suspicious activity detected
+    - LOST: drone lost / last known position
+    """
+    id: str
+    drone_id: str
+    type: Literal["SUSPICIOUS", "LOST", "RECHARGING"]
+    position: LngLat
+    message: str
+    timestamp: float
 
 
 class WorldStateResponse(BaseModel):
     drones: List[DroneDTO]
     home_base: HomeBaseDTO
-    # optional: current sim time, etc.
-    # sim_time: float | None = None
+
+    # <-- NEW: events for the frontend (map alerts + event stream)
+    events: List[EventDTO] = []
 
 
 class PatrolAreaRequest(BaseModel):
-    # polygon ring (without duplicate last point), same as before
-    polygon: List[LngLat]
-
-    # how many drones we want patrolling in the area
-    num_active: int
+    polygon: List[LngLat]   # polygon ring (without duplicate last point)
+    num_active: int         # how many drones we want patrolling
