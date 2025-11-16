@@ -50,7 +50,7 @@ class Simulator:
 
         # swarm parameters inside polygon
         self.neighbor_gain: float = 0.5       # how strongly drones react to neighbors
-        self.center_gain: float = 0.05        # how strongly they are pulled to polygon center
+        self.center_gain: float = 0.0       # how strongly they are pulled to polygon center
         self.max_speed_deg_per_sec: float = 0.001  # max position change in degrees per second
 
     # -------------------------------------------------
@@ -111,10 +111,19 @@ class Simulator:
     # and moves to equalize the distance, plus weak pull to center.
     # -------------------------------------------------
     def _update_patrol_swarm(self, dt: float) -> None:
+        """
+        2D swarm spacing inside the polygon.
+
+        Idea:
+        - PATROL drones repel nearby PATROL neighbors (Poisson-disc style).
+        - Weak pull toward polygon center so they don't hug the border.
+        - Tiny jitter to avoid symmetric deadlocks.
+        - Clamp movement and keep drones inside the polygon.
+        """
         if not self.patrol_polygon or not self.patrol_center:
             return
 
-        # indices of patrol drones
+        # indices of all drones that are currently patrolling
         patrol_indices = [i for i, d in enumerate(self.drones) if d.mode == "PATROL"]
         if len(patrol_indices) == 0:
             return
@@ -123,7 +132,10 @@ class Simulator:
         if desired <= 0:
             return
 
-        # store new positions separately so updates are "synchronous"
+        # how many neighbors each drone looks at (local behavior)
+        K_NEIGHBORS = 5
+
+        # new positions stored separately for synchronous update
         new_positions: List[LngLat] = [d.position for d in self.drones]
 
         cx, cy = self.patrol_center.lng, self.patrol_center.lat
@@ -132,7 +144,11 @@ class Simulator:
             d = self.drones[idx]
             px, py = d.position.lng, d.position.lat
 
-            # find two nearest patrol neighbors
+            fx = 0.0
+            fy = 0.0
+
+            # -------- neighbor repulsion in 2D --------
+            # find K nearest PATROL neighbors
             distances: List[tuple[float, int]] = []
             for j in patrol_indices:
                 if j == idx:
@@ -141,62 +157,62 @@ class Simulator:
                 distances.append((dist, j))
 
             distances.sort(key=lambda x: x[0])
-            neighbors = [j for (dist, j) in distances[:2]]
+            for dist, j in distances[:K_NEIGHBORS]:
+                if dist < 1e-9:
+                    continue
 
-            fx = 0.0
-            fy = 0.0
+                # only react if closer than 1.5 * desired
+                if dist >= 1.5 * desired:
+                    continue
 
-            # neighbor spacing forces
-            for j in neighbors:
-                neighbor = self.drones[j]
-                nx, ny = neighbor.position.lng, neighbor.position.lat
+                n = self.drones[j]
+                vx = px - n.position.lng
+                vy = py - n.position.lat
 
-                # vector from self -> neighbor
-                dx = nx - px
-                dy = ny - py
-                dist = math.sqrt(dx * dx + dy * dy) + 1e-9
+                # unit vector from neighbor -> this drone
+                inv = 1.0 / dist
+                ux = vx * inv
+                uy = vy * inv
 
-                # if dist > desired -> pull towards neighbor
-                # if dist < desired -> push away
-                factor = (dist - desired) / dist
+                # repulsion strength: stronger when very close, fades at 1.5*desired
+                strength = (1.5 * desired - dist) / (1.5 * desired)
+                fx += self.neighbor_gain * strength * ux
+                fy += self.neighbor_gain * strength * uy
 
-                fx += self.neighbor_gain * factor * dx
-                fy += self.neighbor_gain * factor * dy
-
-            # weak pull towards polygon center
-            #fx += self.center_gain * (cx - px)
+            # -------- weak pull to polygon center (prevents big voids) --------
+            fx += self.center_gain * (cx - px)
             fy += self.center_gain * (cy - py)
 
-            # tiny random jitter
+            # -------- tiny random jitter so pattern can "shake" into better state --------
             jitter = 0.00005
             fx += jitter * (random.random() - 0.5)
             fy += jitter * (random.random() - 0.5)
 
-            # limit speed
-            speed = math.sqrt(fx * fx + fy * fy)
-            max_step = self.max_speed_deg_per_sec
-            if speed > 0:
-                scale = min(max_step, speed) / speed
+            # -------- clamp speed & apply step --------
+            force_mag = math.sqrt(fx * fx + fy * fy)
+            if force_mag > 0.0:
+                # max displacement in degrees this frame
+                max_step = self.max_speed_deg_per_sec * dt
+                scale = min(max_step, force_mag) / force_mag
                 fx *= scale
                 fy *= scale
 
-            new_x = px + fx * dt
-            new_y = py + fy * dt
+            new_x = px + fx
+            new_y = py + fy
             new_pos = LngLat(lng=new_x, lat=new_y)
 
-            # keep roughly inside polygon – if we leave, pull back towards center
+            # keep inside polygon: if new pos outside, move halfway back toward center
             if not self._point_in_polygon(new_pos, self.patrol_polygon):
                 new_pos = LngLat(
-                    lng=(px + cx) * 0.5,
-                    lat=(py + cy) * 0.5,
+                    lng=0.5 * (px + cx),
+                    lat=0.5 * (py + cy),
                 )
 
             new_positions[idx] = new_pos
 
-        # apply new positions
+        # -------- commit new positions --------
         for i in patrol_indices:
             self.drones[i].position = new_positions[i]
-
     # -------------------------------------------------
     # This is the function you asked for (polygon + launch setup)
     # -------------------------------------------------
