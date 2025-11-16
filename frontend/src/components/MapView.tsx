@@ -286,7 +286,7 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       // satellite imagery
-      style: "mapbox://styles/mapbox/satellite-v9",
+      style: "mapbox://styles/mapbox/satellite-streets-v12",
       center: KYIV_BASE,
       zoom: 11,
     });
@@ -304,9 +304,20 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
     drawRef.current = draw;
 
     // Home base marker (visual only – backend also knows the base)
-    const baseEl = document.createElement("div");
-    baseEl.className = "base-marker";
-    new mapboxgl.Marker({ element: baseEl }).setLngLat(KYIV_BASE).addTo(map);
+    // Home base marker (visual only – backend also knows the base)
+const baseEl = document.createElement("img");
+baseEl.src = "/home.png";
+baseEl.alt = "Home base";
+
+baseEl.style.width = "32px";   // tweak size as you like
+baseEl.style.height = "32px";
+baseEl.style.borderRadius = "50%";         // optional: make it round
+baseEl.style.boxShadow = "0 0 8px rgba(0,0,0,0.6)";
+
+
+new mapboxgl.Marker({ element: baseEl })
+  .setLngLat(KYIV_BASE)
+  .addTo(map);
 
     map.on("load", () => {
       const engine = new RenderEngine(map, worldRef.current);
@@ -330,10 +341,10 @@ export const MapView: React.FC<MapViewProps> = ({ targetCenter }) => {
         type: "circle",
         source: "selected-drone",
         paint: {
-          "circle-radius": 12,
-          "circle-color": "#ff0000",
+          "circle-radius": 4,
+          "circle-color": "#FF5C00",
           "circle-opacity": 0.7,
-          "circle-stroke-width": 2,
+          "circle-stroke-width": 5,
           "circle-stroke-color": "#ffffff",
         },
       });
